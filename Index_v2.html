@@ -132,7 +132,6 @@
       transition: width 0.1s linear;
     }
     
-    /* エクスポートパネルのレイアウト調整 */
     .export-controls {
       display: none;
       flex-direction: column;
@@ -266,7 +265,6 @@
     </div>
   </div>
 
-  <!-- 進化したワンタップエクスポートパネル -->
   <div class="export-controls" id="exportControls">
     <div class="export-top">
       <label class="checkbox-label">
@@ -317,6 +315,28 @@
     return { original: rawQuery, title: rawQuery, artist: '' };
   }
 
+  async function fetchWithRetry(url, maxRetries = 3) {
+    let waitTime = 2000; 
+    for (let i = 0; i < maxRetries; i++) {
+      try {
+        const response = await fetch(url);
+        if (response.status === 403 || response.status === 429) {
+          console.warn(`API制限を検知。${waitTime/1000}秒待機して再試行します...`);
+          await new Promise(resolve => setTimeout(resolve, waitTime));
+          waitTime *= 2; 
+          continue;
+        }
+        if (!response.ok) throw new Error('HTTP status ' + response.status);
+        return await response.json();
+      } catch (error) {
+        if (i === maxRetries - 1) throw error; 
+        await new Promise(resolve => setTimeout(resolve, waitTime));
+        waitTime *= 2;
+      }
+    }
+    throw new Error('Retries failed');
+  }
+
   async function generatePlaylist() {
     const inputText = document.getElementById('songInput').value;
     const lines = inputText.split('\n').filter(line => line.trim() !== '');
@@ -341,7 +361,14 @@
     audio.pause();
     document.getElementById('now-playing').style.display = 'none';
 
-    const concurrencyLimit = 4;
+    const isLargeList = lines.length > 50;
+    const concurrencyLimit = isLargeList ? 2 : 4; 
+    const delayBetweenChunks = isLargeList ? 1500 : 300; 
+
+    if (isLargeList) {
+      statusMessage.textContent = "※大量の曲が入力されました。サーバー制限を回避するためゆっくり取得します...";
+      await new Promise(resolve => setTimeout(resolve, 1500));
+    }
 
     for (let i = 0; i < lines.length; i += concurrencyLimit) {
       const chunk = lines.slice(i, i + concurrencyLimit);
@@ -354,8 +381,7 @@
         
         try {
           const url = `https://itunes.apple.com/search?term=${encodeURIComponent(rawQuery)}&entity=song&country=jp&limit=15`;
-          const response = await fetch(url);
-          const data = await response.json();
+          const data = await fetchWithRetry(url, 3);
 
           if (data.results && data.results.length > 0) {
             let selectedTrack = null;
@@ -394,7 +420,7 @@
       });
 
       await Promise.all(promises);
-      await new Promise(resolve => setTimeout(resolve, 300));
+      await new Promise(resolve => setTimeout(resolve, delayBetweenChunks));
     }
 
     playlist = playlist.filter(item => item !== undefined);
@@ -457,7 +483,6 @@
     checkboxes.forEach(cb => { cb.checked = isChecked; });
   }
 
-  // --- 進化したワンタップ転送処理 ---
   function exportSelected() {
     const checkboxes = document.querySelectorAll('.track-checkbox:checked');
     if (checkboxes.length === 0) {
@@ -473,11 +498,10 @@
     });
 
     navigator.clipboard.writeText(exportText).then(() => {
-      // コピー完了を知らせると同時に、次のアクション（サイトを開く）を促す
-      const userAction = confirm(`✅ 選択した ${checkboxes.length} 曲をコピーしました！\n\n【OK】を押すと、プレイリスト変換サイト(TuneMyMusic)が自動で開きます。`);
+      const userAction = confirm(`✅ 選択した ${checkboxes.length} 曲をコピーしました！\n\n【OK】を押すと、プレイリスト変換サイト(TuneMyMusic)が自動で開きます。\n\n開いた先の入力欄に「貼り付け」をして進めてください。`);
       if (userAction) {
-        // TuneMyMusicのサイトを新しいタブで自動的に開く
-        window.open('https://www.tunemymusic.com/ja/', '_blank');
+        // 修正：URLをトップページに変更
+        window.open('https://www.tunemymusic.com/', '_blank');
       }
     }).catch(err => {
       alert("コピーに失敗しました。ブラウザの権限設定をご確認ください。");
